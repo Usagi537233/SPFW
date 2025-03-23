@@ -4,9 +4,9 @@ import (
 	"flag"
 	"fmt"
 	"io"
-	"io/ioutil"
 	"net"
 	"net/http"
+	"os"
 	"strings"
 	"sync"
 	"time"
@@ -17,7 +17,7 @@ var (
 	whitelistMu sync.RWMutex
 )
 
-// 获取当前时间的字符串格式
+// 获取当前时间字符串
 func getCurrentTime() string {
 	return time.Now().Format("2006-01-02 15:04:05")
 }
@@ -26,67 +26,62 @@ func getCurrentTime() string {
 func updateWhitelist(url string) {
 	resp, err := http.Get(url)
 	if err != nil {
+		fmt.Printf("[%s] [ERROR] 获取白名单失败: %v\n", getCurrentTime(), err)
 		return
 	}
 	defer resp.Body.Close()
 
-	body, err := ioutil.ReadAll(resp.Body)
+	data, err := io.ReadAll(resp.Body)
 	if err != nil {
+		fmt.Printf("[%s] [ERROR] 读取白名单失败: %v\n", getCurrentTime(), err)
 		return
 	}
 
-	// 白名单每行一个 IP
-	ips := strings.Split(string(body), "\n")
+	ips := strings.Split(string(data), "\n")
 	newWhitelist := make(map[string]struct{})
 	for _, ip := range ips {
 		ip = strings.TrimSpace(ip)
-		// 仅添加有效 IP 地址
 		if ip != "" {
 			newWhitelist[ip] = struct{}{}
 		}
 	}
 
-	// 更新白名单
 	whitelistMu.Lock()
 	whitelist = newWhitelist
 	whitelistMu.Unlock()
+
+	fmt.Printf("[%s] [INFO] 白名单更新成功, 共 %d 个 IP\n", getCurrentTime(), len(newWhitelist))
 }
 
-// 监听并转发连接
+// 处理连接并转发数据
 func handleConnection(client net.Conn, target string) {
 	defer client.Close()
-
-	// 获取客户端 IP 地址
 	clientAddr := client.RemoteAddr().(*net.TCPAddr).IP.String()
 
-	// 白名单检查
 	whitelistMu.RLock()
 	_, allowed := whitelist[clientAddr]
 	whitelistMu.RUnlock()
 
-	// 输出客户端 IP 地址和时间戳
-	fmt.Printf("[%s] 客户端连接: %s\n", getCurrentTime(), clientAddr)
+	fmt.Printf("[%s] [INFO] 客户端连接: %s\n", getCurrentTime(), clientAddr)
 
 	if !allowed {
-		// 显示拒绝连接的信息和时间戳
 		fmt.Printf("[%s] [WARNING] 拒绝连接: %s\n", getCurrentTime(), clientAddr)
 		return
 	}
 
-	// 连接目标并开始转发
 	server, err := net.Dial("tcp", target)
 	if err != nil {
+		fmt.Printf("[%s] [ERROR] 无法连接目标: %s (%v)\n", getCurrentTime(), target, err)
 		return
 	}
 	defer server.Close()
 
-	// 数据转发
-	go func() { io.Copy(server, client) }()
+	go io.Copy(server, client)
 	io.Copy(client, server)
 }
 
+// 启动代理服务器
 func startProxy(listenAddr, targetAddr, whitelistURL string, updateInterval time.Duration) {
-	// 定时更新白名单
 	go func() {
 		for {
 			updateWhitelist(whitelistURL)
@@ -94,16 +89,19 @@ func startProxy(listenAddr, targetAddr, whitelistURL string, updateInterval time
 		}
 	}()
 
-	// 启动监听
 	listener, err := net.Listen("tcp", listenAddr)
 	if err != nil {
-		return
+		fmt.Printf("[%s] [ERROR] 监听端口失败: %s (%v)\n", getCurrentTime(), listenAddr, err)
+		os.Exit(1)
 	}
 	defer listener.Close()
+
+	fmt.Printf("[%s] [INFO] 代理服务器已启动: %s -> %s\n", getCurrentTime(), listenAddr, targetAddr)
 
 	for {
 		client, err := listener.Accept()
 		if err != nil {
+			fmt.Printf("[%s] [WARNING] 客户端连接失败: %v\n", getCurrentTime(), err)
 			continue
 		}
 		go handleConnection(client, targetAddr)
@@ -113,25 +111,29 @@ func startProxy(listenAddr, targetAddr, whitelistURL string, updateInterval time
 func main() {
 	L := flag.String("L", "", "格式: tcp://:端口/目标 (必填)")
 	whitelistURL := flag.String("url", "", "白名单URL (必填)")
-	updateInterval := flag.Int("t", 0, "更新间隔(秒) (必填)")
+	updateInterval := flag.Int("t", 60, "更新间隔(秒) (默认 60 秒)")
 
 	flag.Parse()
 
-	// 检查参数
-	if *L == "" || *whitelistURL == "" || *updateInterval == 0 {
-		flag.Usage()
-		return
+	if *L == "" || *whitelistURL == "" {
+		fmt.Println("用法: ./proxy -L tcp://:端口/目标 -url 白名单URL [-t 更新间隔]")
+		flag.PrintDefaults()
+		os.Exit(1)
 	}
 
 	// 解析 -L 参数
-	parts := strings.SplitN(strings.TrimPrefix(*L, "tcp://"), "/", 2)
+	LStr := *L
+	if strings.HasPrefix(LStr, "tcp://") {
+		LStr = LStr[len("tcp://"):]
+	}
+	parts := strings.SplitN(LStr, "/", 2)
 	if len(parts) != 2 {
-		return
+		fmt.Println("错误: -L 格式错误，应为 tcp://:端口/目标")
+		os.Exit(1)
 	}
 
 	listenAddr := parts[0]
 	targetAddr := parts[1]
 
-	// 启动端口转发服务
 	startProxy(listenAddr, targetAddr, *whitelistURL, time.Duration(*updateInterval)*time.Second)
 }
