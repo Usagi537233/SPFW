@@ -73,8 +73,12 @@ func parseWhitelist(content string) (map[string]struct{}, []*net.IPNet) {
 	return newIPs, newCIDRs
 }
 
-// 更新白名单
-func updateWhitelist(url string) {
+// 更新远程白名单
+func updateRemoteWhitelist(url string) {
+	if url == "" {
+		return
+	}
+
 	resp, err := http.Get(url)
 	if err != nil || resp.StatusCode != 200 {
 		if debug {
@@ -112,14 +116,14 @@ func updateWhitelist(url string) {
 func useFallbackWhitelist() {
 	if localWhitelistPath == "" {
 		if debug {
-			fmt.Printf("[%s] [WARNING] 无法使用 fallback 白名单\n", getCurrentTime())
+			fmt.Printf("[%s] [WARNING] 无法使用 local 白名单\n", getCurrentTime())
 		}
 		return
 	}
 	data, err := os.ReadFile(localWhitelistPath)
 	if err != nil {
 		if debug {
-			fmt.Printf("[%s] [ERROR] 读取 fallback 白名单失败: %v\n", getCurrentTime(), err)
+			fmt.Printf("[%s] [ERROR] 读取 local 白名单失败: %v\n", getCurrentTime(), err)
 		}
 		return
 	}
@@ -129,9 +133,23 @@ func useFallbackWhitelist() {
 	whitelistCIDRs = newCIDRs
 	whitelistMu.Unlock()
 	if debug {
-		fmt.Printf("[%s] 使用 fallback 白名单: %d 个 IP, %d 个网段\n",
+		fmt.Printf("[%s] 使用 local 白名单: %d 个 IP, %d 个网段\n",
 			getCurrentTime(), len(newIPs), len(newCIDRs))
 	}
+}
+
+// 统一白名单更新循环
+func startWhitelistUpdater(url string, interval time.Duration) {
+	go func() {
+		for {
+			if url != "" {
+				updateRemoteWhitelist(url)
+			} else if localWhitelistPath != "" {
+				useFallbackWhitelist()
+			}
+			time.Sleep(interval)
+		}
+	}()
 }
 
 // 从 HTTP Header 获取客户端 IP
@@ -201,6 +219,7 @@ func getBackendPortInt(backend string) int {
 	return p
 }
 
+// 处理客户端连接
 func handleConnection(client net.Conn, target string) {
 	defer client.Close()
 	clientIP := client.RemoteAddr().(*net.TCPAddr).IP.String()
@@ -251,7 +270,7 @@ func handleConnection(client net.Conn, target string) {
 		}
 		conn.Write([]byte(proxyLine))
 
-		// HTTP/WS 双向透传
+		// TCP/HTTP 双向透传
 		go io.Copy(conn, bodyReader)
 		io.Copy(client, conn)
 		return
@@ -268,16 +287,8 @@ func handleConnection(client net.Conn, target string) {
 	io.Copy(client, server)
 }
 
-func startProxy(listenAddr, targetAddr, whitelistURL string, updateInterval time.Duration) {
-	updateWhitelist(whitelistURL)
-
-	go func() {
-		for {
-			time.Sleep(updateInterval)
-			updateWhitelist(whitelistURL)
-		}
-	}()
-
+// 启动代理监听
+func startProxy(listenAddr, targetAddr string) {
 	listener, err := net.Listen("tcp", listenAddr)
 	if err != nil {
 		fmt.Printf("[%s] [FATAL] 无法监听 %s: %v\n", getCurrentTime(), listenAddr, err)
@@ -298,16 +309,25 @@ func startProxy(listenAddr, targetAddr, whitelistURL string, updateInterval time
 
 func main() {
 	L := flag.String("L", "", "格式: tcp://:端口/目标 (必填)")
-	whitelistURL := flag.String("url", "", "白名单URL (必填)")
-	updateInterval := flag.Int("t", 60, "更新间隔(秒)")
-	local := flag.String("local", "", "本地白名单文件路径 (可选 fallback)")
+	whitelistURL := flag.String("url", "", "远程白名单URL (可选，-local 二选一)")
+	updateInterval := flag.Int("t", 60, "白名单更新间隔(秒)")
+	local := flag.String("local", "", "本地白名单文件路径 (可选，-url 二选一)")
+
 	flag.BoolVar(&useProtocol, "use-protocol", false, "是否使用 protocol 协议转发目标")
 	flag.BoolVar(&debug, "D", false, "显示调试日志")
 	flag.BoolVar(&debug, "debug", false, "显示调试日志")
 
 	flag.Parse()
 
-	if *L == "" || *whitelistURL == "" {
+	// 参数校验：必须 -L，且 -url 与 -local 二选一
+	if *L == "" {
+		fmt.Println("参数错误: 必须指定监听和目标地址: -L tcp://:端口/目标")
+		flag.Usage()
+		return
+	}
+
+	if *whitelistURL == "" && *local == "" {
+		fmt.Println("参数错误: 必须指定 -url 远程白名单 或 -local 本地白名单")
 		flag.Usage()
 		return
 	}
@@ -325,5 +345,9 @@ func main() {
 
 	rand.Seed(time.Now().UnixNano())
 
-	startProxy(listenAddr, targetAddr, *whitelistURL, time.Duration(*updateInterval)*time.Second)
+	// 启动白名单更新循环
+	startWhitelistUpdater(*whitelistURL, time.Duration(*updateInterval)*time.Second)
+
+	// 启动代理
+	startProxy(listenAddr, targetAddr)
 }
