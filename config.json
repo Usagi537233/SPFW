@@ -1,0 +1,21 @@
+{
+  "debug": true,
+  "proxies": [
+    {
+      "listen_addr": ":8080",
+      "target_addr": "127.0.0.1:80",
+      "use_protocol": false,
+      "local_whitelist": "",
+      "whitelist_url": "http://example.com/whitelist1.txt",
+      "update_interval": 60
+    },
+    {
+      "listen_addr": ":8443",
+      "target_addr": "127.0.0.1:443",
+      "use_protocol": true,
+      "local_whitelist": "/root/whitelist_local.txt",
+      "whitelist_url": "",
+      "update_interval": 120
+    }
+  ]
+}
