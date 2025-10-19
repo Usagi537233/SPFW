@@ -2,6 +2,7 @@ package main
 
 import (
 	"bufio"
+	"encoding/json"
 	"flag"
 	"fmt"
 	"io"
@@ -12,43 +13,35 @@ import (
 	"strings"
 	"sync"
 	"time"
-	"math/rand"
 )
 
 var (
-	whitelistIPs       = make(map[string]struct{})
-	whitelistCIDRs     []*net.IPNet
-	whitelistMu        sync.RWMutex
-	localWhitelistPath string
-	useProtocol        bool
-	debug              bool
+	debug          bool
+	useProtocol    bool
+	whitelistIPs   = make(map[string]struct{})
+	whitelistCIDRs []*net.IPNet
+	whitelistMu    sync.RWMutex
 )
 
-// 获取当前时间字符串
+// JSON 配置
+type ConfigJSON struct {
+	Debug   bool `json:"debug"`
+	Proxies []struct {
+		ListenAddr     string `json:"listen_addr"`
+		TargetAddr     string `json:"target_addr"`
+		UseProtocol    bool   `json:"use_protocol"`
+		LocalWhitelist string `json:"local_whitelist,omitempty"`
+		WhitelistURL   string `json:"whitelist_url,omitempty"`
+		UpdateInterval int    `json:"update_interval,omitempty"`
+	} `json:"proxies"`
+}
+
+// 当前时间
 func getCurrentTime() string {
 	return time.Now().Format("2006-01-02 15:04:05")
 }
 
-// 检查 IP 是否在白名单
-func isAllowed(ipStr string) bool {
-	ip := net.ParseIP(ipStr)
-	if ip == nil {
-		return false
-	}
-	whitelistMu.RLock()
-	defer whitelistMu.RUnlock()
-	if _, ok := whitelistIPs[ipStr]; ok {
-		return true
-	}
-	for _, cidr := range whitelistCIDRs {
-		if cidr.Contains(ip) {
-			return true
-		}
-	}
-	return false
-}
-
-// 解析白名单内容
+// 白名单解析
 func parseWhitelist(content string) (map[string]struct{}, []*net.IPNet) {
 	newIPs := make(map[string]struct{})
 	var newCIDRs []*net.IPNet
@@ -73,57 +66,12 @@ func parseWhitelist(content string) (map[string]struct{}, []*net.IPNet) {
 	return newIPs, newCIDRs
 }
 
-// 更新远程白名单
-func updateRemoteWhitelist(url string) {
-	if url == "" {
-		return
-	}
-
-	resp, err := http.Get(url)
-	if err != nil || resp.StatusCode != 200 {
-		if debug {
-			fmt.Printf("[%s] [ERROR] 无法获取远程白名单: %v\n", getCurrentTime(), err)
-		}
-		useFallbackWhitelist()
-		return
-	}
-	defer resp.Body.Close()
-
-	body, err := ioutil.ReadAll(resp.Body)
+// 使用本地白名单
+func useFallbackWhitelist(path string) {
+	data, err := os.ReadFile(path)
 	if err != nil {
 		if debug {
-			fmt.Printf("[%s] [ERROR] 读取远程白名单失败: %v\n", getCurrentTime(), err)
-		}
-		useFallbackWhitelist()
-		return
-	}
-
-	newIPs, newCIDRs := parseWhitelist(string(body))
-	whitelistMu.Lock()
-	whitelistIPs = newIPs
-	whitelistCIDRs = newCIDRs
-	whitelistMu.Unlock()
-
-	if localWhitelistPath != "" {
-		_ = ioutil.WriteFile(localWhitelistPath, body, 0644)
-	}
-	if debug {
-		fmt.Printf("[%s] 白名单更新成功: %d IP, %d CIDR\n", getCurrentTime(), len(newIPs), len(newCIDRs))
-	}
-}
-
-// fallback 本地白名单
-func useFallbackWhitelist() {
-	if localWhitelistPath == "" {
-		if debug {
-			fmt.Printf("[%s] [WARNING] 无法使用 local 白名单\n", getCurrentTime())
-		}
-		return
-	}
-	data, err := os.ReadFile(localWhitelistPath)
-	if err != nil {
-		if debug {
-			fmt.Printf("[%s] [ERROR] 读取 local 白名单失败: %v\n", getCurrentTime(), err)
+			fmt.Printf("[%s] [ERROR] 读取本地白名单失败: %v\n", getCurrentTime(), err)
 		}
 		return
 	}
@@ -133,23 +81,51 @@ func useFallbackWhitelist() {
 	whitelistCIDRs = newCIDRs
 	whitelistMu.Unlock()
 	if debug {
-		fmt.Printf("[%s] 使用 local 白名单: %d 个 IP, %d 个网段\n",
-			getCurrentTime(), len(newIPs), len(newCIDRs))
+		fmt.Printf("[%s] 使用本地白名单: %d IP, %d CIDR\n", getCurrentTime(), len(newIPs), len(newCIDRs))
 	}
 }
 
-// 统一白名单更新循环
-func startWhitelistUpdater(url string, interval time.Duration) {
-	go func() {
-		for {
-			if url != "" {
-				updateRemoteWhitelist(url)
-			} else if localWhitelistPath != "" {
-				useFallbackWhitelist()
-			}
-			time.Sleep(interval)
+// 更新远程白名单
+func updateRemoteWhitelist(url string) {
+	if url == "" {
+		return
+	}
+	resp, err := http.Get(url)
+	if err != nil {
+		if debug {
+			fmt.Printf("[%s] [ERROR] 获取远程白名单失败: %v\n", getCurrentTime(), err)
 		}
-	}()
+		return
+	}
+	defer resp.Body.Close()
+	body, _ := ioutil.ReadAll(resp.Body)
+	newIPs, newCIDRs := parseWhitelist(string(body))
+	whitelistMu.Lock()
+	whitelistIPs = newIPs
+	whitelistCIDRs = newCIDRs
+	whitelistMu.Unlock()
+	if debug {
+		fmt.Printf("[%s] 远程白名单更新成功: %d IP, %d CIDR\n", getCurrentTime(), len(newIPs), len(newCIDRs))
+	}
+}
+
+// 检查 IP 是否允许
+func isAllowed(ipStr string) bool {
+	ip := net.ParseIP(ipStr)
+	if ip == nil {
+		return false
+	}
+	whitelistMu.RLock()
+	defer whitelistMu.RUnlock()
+	if _, ok := whitelistIPs[ipStr]; ok {
+		return true
+	}
+	for _, c := range whitelistCIDRs {
+		if c.Contains(ip) {
+			return true
+		}
+	}
+	return false
 }
 
 // 从 HTTP Header 获取客户端 IP
@@ -162,12 +138,11 @@ func extractClientIPFromHTTP(data []byte) string {
 		}
 		return ""
 	}
-	header := req.Header
 	candidates := []string{
-		header.Get("X-Forwarded-For"),
-		header.Get("CF-Connecting-IP"),
-		header.Get("X-Real-IP"),
-		header.Get("Forwarded"),
+		req.Header.Get("X-Forwarded-For"),
+		req.Header.Get("CF-Connecting-IP"),
+		req.Header.Get("X-Real-IP"),
+		req.Header.Get("Forwarded"),
 	}
 	for _, v := range candidates {
 		if v == "" {
@@ -185,47 +160,24 @@ func extractClientIPFromHTTP(data []byte) string {
 	return ""
 }
 
-// 检测协议类型
+// 协议检测
 func detectProtocol(data []byte) string {
 	s := string(data)
-	if strings.HasPrefix(s, "GET ") ||
-		strings.HasPrefix(s, "POST ") ||
-		strings.HasPrefix(s, "HEAD ") ||
-		strings.HasPrefix(s, "PUT ") ||
-		strings.HasPrefix(s, "DELETE ") {
+	if strings.HasPrefix(s, "GET ") || strings.HasPrefix(s, "POST ") || strings.HasPrefix(s, "HEAD ") {
 		return "HTTP"
 	}
-	if strings.HasPrefix(s, "PROT") {
+	if strings.HasPrefix(s, "PROXY ") {
 		return "PROTOCOL"
 	}
 	return "TCP"
 }
 
-func getBackendIP(backend string) string {
-	host, _, err := net.SplitHostPort(backend)
-	if err != nil {
-		return backend
-	}
-	return host
-}
-
-func getBackendPortInt(backend string) int {
-	_, port, err := net.SplitHostPort(backend)
-	if err != nil {
-		return 80
-	}
-	var p int
-	fmt.Sscanf(port, "%d", &p)
-	return p
-}
-
-// 处理客户端连接
-func handleConnection(client net.Conn, target string) {
+// 核心代理
+func handleConnection(client net.Conn, target string, useProto bool) {
 	defer client.Close()
 	clientIP := client.RemoteAddr().(*net.TCPAddr).IP.String()
 	clientPort := client.RemoteAddr().(*net.TCPAddr).Port
 
-	// 读取前缀数据做协议检测
 	client.SetReadDeadline(time.Now().Add(500 * time.Millisecond))
 	peekBuf := make([]byte, 1024)
 	n, _ := client.Read(peekBuf)
@@ -233,121 +185,138 @@ func handleConnection(client net.Conn, target string) {
 	data := peekBuf[:n]
 
 	proto := detectProtocol(data)
-	switch proto {
-	case "HTTP":
+	if proto == "HTTP" {
 		if hdrIP := extractClientIPFromHTTP(data); hdrIP != "" {
 			clientIP = hdrIP
-			if debug {
-				fmt.Printf("[%s] [DEBUG][HTTP] 从 Header 获取客户端 IP: %s\n", getCurrentTime(), clientIP)
-			}
-		}
-	case "PROTOCOL":
-		if debug {
-			fmt.Printf("[%s] [DEBUG][PROTOCOL] 检测到 protocol 协议 %s\n", getCurrentTime(), clientIP)
 		}
 	}
 
-	fmt.Printf("[%s] 客户端连接: %s\n", getCurrentTime(), clientIP)
+	if debug {
+		fmt.Printf("[%s] 客户端连接: %s\n", getCurrentTime(), clientIP)
+	}
 	if !isAllowed(clientIP) {
-		fmt.Printf("[%s] [WARNING] 拒绝连接: %s\n", getCurrentTime(), clientIP)
+		if debug {
+			fmt.Printf("[%s] [WARNING] 拒绝连接: %s\n", getCurrentTime(), clientIP)
+		}
 		return
 	}
 
+	conn, err := net.Dial("tcp", target)
+	if err != nil {
+		if debug {
+			fmt.Printf("[%s] [ERROR] 连接目标失败: %v\n", getCurrentTime(), err)
+		}
+		return
+	}
+	defer conn.Close()
+
 	bodyReader := io.MultiReader(strings.NewReader(string(data)), client)
 
-	if useProtocol {
-		conn, err := net.Dial("tcp", target)
-		if err != nil {
-			fmt.Printf("[%s] [ERROR] 无法连接目标: %v\n", getCurrentTime(), err)
-			return
-		}
-		defer conn.Close()
-
+	if useProto {
 		proxyLine := fmt.Sprintf("PROXY TCP4 %s %s %d %d\r\n",
-			clientIP, getBackendIP(target), clientPort, getBackendPortInt(target))
+			clientIP, conn.RemoteAddr().(*net.TCPAddr).IP.String(), clientPort, conn.RemoteAddr().(*net.TCPAddr).Port)
 		if debug {
 			fmt.Printf("[%s] [DEBUG] 发送 PROXY Protocol v1: %s", getCurrentTime(), proxyLine)
 		}
 		conn.Write([]byte(proxyLine))
-
-		// TCP/HTTP 双向透传
-		go io.Copy(conn, bodyReader)
-		io.Copy(client, conn)
-		return
 	}
 
-	// 默认 TCP 透传
-	server, err := net.Dial("tcp", target)
-	if err != nil {
-		fmt.Printf("[%s] [ERROR] 无法连接目标: %v\n", getCurrentTime(), err)
-		return
-	}
-	defer server.Close()
-	go io.Copy(server, bodyReader)
-	io.Copy(client, server)
+	go io.Copy(conn, bodyReader)
+	io.Copy(client, conn)
 }
 
-// 启动代理监听
-func startProxy(listenAddr, targetAddr string) {
-	listener, err := net.Listen("tcp", listenAddr)
+// 启动代理
+func startProxy(listen, target, whitelistURL, local string, useProto bool, interval int) {
+	if whitelistURL != "" {
+		go func() {
+			for {
+				updateRemoteWhitelist(whitelistURL)
+				time.Sleep(time.Duration(interval) * time.Second)
+			}
+		}()
+	} else if local != "" {
+		go func() {
+			for {
+				useFallbackWhitelist(local)
+				time.Sleep(time.Duration(interval) * time.Second)
+			}
+		}()
+	}
+
+	listener, err := net.Listen("tcp", listen)
 	if err != nil {
-		fmt.Printf("[%s] [FATAL] 无法监听 %s: %v\n", getCurrentTime(), listenAddr, err)
+		if debug {
+			fmt.Printf("[%s] [FATAL] 无法监听 %s: %v\n", getCurrentTime(), listen, err)
+		}
 		return
 	}
 	defer listener.Close()
 
-	fmt.Printf("[%s] 启动代理: %s -> %s (use-protocol=%v)\n", getCurrentTime(), listenAddr, targetAddr, useProtocol)
+	fmt.Printf("[%s] 启动代理: %s -> %s (use-protocol=%v)\n", getCurrentTime(), listen, target, useProto)
 
 	for {
 		client, err := listener.Accept()
 		if err != nil {
 			continue
 		}
-		go handleConnection(client, targetAddr)
+		go handleConnection(client, target, useProto)
 	}
 }
 
 func main() {
-	L := flag.String("L", "", "格式: tcp://:端口/目标 (必填)")
-	whitelistURL := flag.String("url", "", "远程白名单URL (可选，-local 二选一)")
+	L := flag.String("L", "", "格式: tcp://:端口/目标")
+	whitelistURL := flag.String("url", "", "远程白名单URL")
+	local := flag.String("local", "", "本地白名单路径")
 	updateInterval := flag.Int("t", 60, "白名单更新间隔(秒)")
-	local := flag.String("local", "", "本地白名单文件路径 (可选，-url 二选一)")
-
-	flag.BoolVar(&useProtocol, "use-protocol", false, "是否使用 protocol 协议转发目标")
-	flag.BoolVar(&debug, "D", false, "显示调试日志")
-	flag.BoolVar(&debug, "debug", false, "显示调试日志")
-
+	configPath := flag.String("C", "", "JSON 配置文件路径")
+	flag.BoolVar(&useProtocol, "use-protocol", false, "是否使用 PROXY 协议转发")
+	debugCLI := flag.Bool("debug", false, "命令行模式下显示调试日志")
 	flag.Parse()
 
-	// 参数校验：必须 -L，且 -url 与 -local 二选一
+	// -C 模式
+	if *configPath != "" {
+		data, err := os.ReadFile(*configPath)
+		if err != nil {
+			fmt.Printf("读取配置文件失败: %v\n", err)
+			return
+		}
+		var cfg ConfigJSON
+		if err := json.Unmarshal(data, &cfg); err != nil {
+			fmt.Printf("解析配置文件失败: %v\n", err)
+			return
+		}
+
+		// JSON 配置决定全局 debug
+		debug = cfg.Debug
+
+		for _, p := range cfg.Proxies {
+			go startProxy(p.ListenAddr, p.TargetAddr, p.WhitelistURL, p.LocalWhitelist, p.UseProtocol, p.UpdateInterval)
+		}
+		select {}
+	}
+
+	// 命令行模式
+	debug = *debugCLI
+
 	if *L == "" {
-		fmt.Println("参数错误: 必须指定监听和目标地址: -L tcp://:端口/目标")
+		fmt.Println("参数错误: 必须指定监听与目标地址 -L")
 		flag.Usage()
 		return
 	}
 
 	if *whitelistURL == "" && *local == "" {
-		fmt.Println("参数错误: 必须指定 -url 远程白名单 或 -local 本地白名单")
+		fmt.Println("参数错误: 必须指定远程白名单或本地白名单")
 		flag.Usage()
 		return
 	}
 
-	localWhitelistPath = *local
-
 	parts := strings.SplitN(strings.TrimPrefix(*L, "tcp://"), "/", 2)
 	if len(parts) != 2 {
-		fmt.Println("参数格式错误，应为: -L tcp://:监听端口/目标地址")
+		fmt.Println("参数错误: -L 格式为 tcp://:端口/目标地址")
 		return
 	}
-
 	listenAddr := parts[0]
 	targetAddr := parts[1]
 
-	rand.Seed(time.Now().UnixNano())
-
-	// 启动白名单更新循环
-	startWhitelistUpdater(*whitelistURL, time.Duration(*updateInterval)*time.Second)
-
-	// 启动代理
-	startProxy(listenAddr, targetAddr)
+	startProxy(listenAddr, targetAddr, *whitelistURL, *local, useProtocol, *updateInterval)
 }
