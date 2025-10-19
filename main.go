@@ -185,15 +185,22 @@ func handleConnection(client net.Conn, target string, useProto bool) {
 	data := peekBuf[:n]
 
 	proto := detectProtocol(data)
+	headerIP := ""
 	if proto == "HTTP" {
-		if hdrIP := extractClientIPFromHTTP(data); hdrIP != "" {
-			clientIP = hdrIP
+		headerIP = extractClientIPFromHTTP(data)
+		if headerIP != "" {
+			clientIP = headerIP
 		}
 	}
 
-	if debug {
-		fmt.Printf("[%s] 客户端连接: %s\n", getCurrentTime(), clientIP)
+	// **始终显示客户端连接，不管 debug 是否开**
+	if headerIP != "" && headerIP != clientIP {
+		fmt.Printf("[%s] 客户端连接: %s (HTTP Header IP: %s)\n", getCurrentTime(), client.RemoteAddr().(*net.TCPAddr).IP.String(), headerIP)
+	} else {
+		fmt.Printf("[%s] 客户端连接: %s\n", getCurrentTime(), client.RemoteAddr().(*net.TCPAddr).IP.String())
 	}
+
+	// 下面还是用 debug 控制其他日志
 	if !isAllowed(clientIP) {
 		if debug {
 			fmt.Printf("[%s] [WARNING] 拒绝连接: %s\n", getCurrentTime(), clientIP)
@@ -224,6 +231,7 @@ func handleConnection(client net.Conn, target string, useProto bool) {
 	go io.Copy(conn, bodyReader)
 	io.Copy(client, conn)
 }
+
 
 // 启动代理
 func startProxy(listen, target, whitelistURL, local string, useProto bool, interval int) {
