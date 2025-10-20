@@ -2,6 +2,7 @@ package main
 
 import (
 	"bufio"
+	"bytes"
 	"encoding/json"
 	"flag"
 	"fmt"
@@ -39,7 +40,7 @@ type ConfigJSON struct {
 
 // 获取当前时间字符串
 func getCurrentTime() string {
-    return time.Now().Format("2006-01-02 15:04:05")
+	return time.Now().Format("2006-01-02 15:04:05")
 }
 
 // 解析白名单内容
@@ -149,9 +150,29 @@ func isAllowed(ipStr string) bool {
 	return false
 }
 
+// 提取 PROXY v1 协议中的客户端 IP
+func extractProxyHeaderIP(data []byte) (string, bool) {
+	if !bytes.HasPrefix(data, []byte("PROXY ")) {
+		return "", false
+	}
+	reader := bufio.NewReader(bytes.NewReader(data))
+	line, err := reader.ReadString('\n')
+	if err != nil {
+		return "", false
+	}
+	parts := strings.Fields(line)
+	if len(parts) >= 6 {
+		ip := parts[2] // PROXY TCP4 真实IP 目标IP 真实端口 目标端口
+		if net.ParseIP(ip) != nil {
+			return ip, true
+		}
+	}
+	return "", false
+}
+
 // 从 HTTP Header 获取客户端 IP
 func extractClientIPFromHTTP(data []byte) string {
-	reader := bufio.NewReader(strings.NewReader(string(data)))
+	reader := bufio.NewReader(bytes.NewReader(data))
 	req, err := http.ReadRequest(reader)
 	if err != nil {
 		if debug {
@@ -184,14 +205,13 @@ func extractClientIPFromHTTP(data []byte) string {
 
 // 检测协议类型
 func detectProtocol(data []byte) string {
-	s := string(data)
-	if strings.HasPrefix(s, "GET ") || strings.HasPrefix(s, "POST ") ||
-		strings.HasPrefix(s, "HEAD ") || strings.HasPrefix(s, "PUT ") ||
-		strings.HasPrefix(s, "DELETE ") {
-		return "HTTP"
+	if bytes.HasPrefix(data, []byte("PROXY ")) {
+		return "PROXY"
 	}
-	if strings.HasPrefix(s, "PROT") {
-		return "PROTOCOL"
+	if bytes.HasPrefix(data, []byte("GET ")) || bytes.HasPrefix(data, []byte("POST ")) ||
+		bytes.HasPrefix(data, []byte("HEAD ")) || bytes.HasPrefix(data, []byte("PUT ")) ||
+		bytes.HasPrefix(data, []byte("DELETE ")) {
+		return "HTTP"
 	}
 	return "TCP"
 }
@@ -215,27 +235,40 @@ func getBackendPortInt(backend string) int {
 }
 
 // 核心代理逻辑
-func handleConnection(client net.Conn, target string) {
+func handleConnection(client net.Conn, target string, useProtocolOut bool) {
 	defer client.Close()
-	clientIP := client.RemoteAddr().(*net.TCPAddr).IP.String()
-	clientPort := client.RemoteAddr().(*net.TCPAddr).Port
+	remoteAddr := client.RemoteAddr().(*net.TCPAddr)
+	clientIP := remoteAddr.IP.String()
+	clientPort := remoteAddr.Port
 
 	client.SetReadDeadline(time.Now().Add(500 * time.Millisecond))
-	peekBuf := make([]byte, 1024)
-	n, _ := client.Read(peekBuf)
+	buf := make([]byte, 4096)
+	n, _ := client.Read(buf)
 	client.SetReadDeadline(time.Time{})
-	data := peekBuf[:n]
+	data := buf[:n]
 
+	// 自动检测客户端协议
 	proto := detectProtocol(data)
-	if proto == "HTTP" {
+
+	if proto == "PROXY" {
+		if hdrIP, ok := extractProxyHeaderIP(data); ok {
+			clientIP = hdrIP
+			if debug {
+				fmt.Printf("[%s] [DEBUG][PROXY] 客户端 IP: %s\n", getCurrentTime(), clientIP)
+			}
+			// 去掉 PROXY header
+			idx := bytes.IndexByte(data, '\n')
+			if idx >= 0 {
+				data = data[idx+1:]
+			}
+		}
+	} else if proto == "HTTP" {
 		if hdrIP := extractClientIPFromHTTP(data); hdrIP != "" {
 			clientIP = hdrIP
 			if debug {
 				fmt.Printf("[%s] [DEBUG][HTTP] 客户端 IP: %s\n", getCurrentTime(), clientIP)
 			}
 		}
-	} else if proto == "PROTOCOL" && debug {
-		fmt.Printf("[%s] [DEBUG][PROTOCOL] 检测到 PROXY 协议 %s\n", getCurrentTime(), clientIP)
 	}
 
 	fmt.Printf("[%s] 客户端连接: %s\n", getCurrentTime(), clientIP)
@@ -244,38 +277,32 @@ func handleConnection(client net.Conn, target string) {
 		return
 	}
 
-	bodyReader := io.MultiReader(strings.NewReader(string(data)), client)
+	bodyReader := io.MultiReader(bytes.NewReader(data), client)
 
-	if useProtocol {
-		conn, err := net.Dial("tcp", target)
-		if err != nil {
-			fmt.Printf("[%s] [ERROR] 无法连接目标: %v\n", getCurrentTime(), err)
-			return
-		}
-		defer conn.Close()
-		proxyLine := fmt.Sprintf("PROXY TCP4 %s %s %d %d\r\n",
-			clientIP, getBackendIP(target), clientPort, getBackendPortInt(target))
-		if debug {
-			fmt.Printf("[%s] [DEBUG] 发送 PROXY Protocol v1: %s", getCurrentTime(), proxyLine)
-		}
-		conn.Write([]byte(proxyLine))
-		go io.Copy(conn, bodyReader)
-		io.Copy(client, conn)
-		return
-	}
-
+	// 根据配置决定是否转发 PROXY 协议
 	server, err := net.Dial("tcp", target)
 	if err != nil {
 		fmt.Printf("[%s] [ERROR] 无法连接目标: %v\n", getCurrentTime(), err)
 		return
 	}
 	defer server.Close()
+
+	if useProtocolOut {
+		proxyLine := fmt.Sprintf("PROXY TCP4 %s %s %d %d\r\n",
+			clientIP, getBackendIP(target), clientPort, getBackendPortInt(target))
+		if debug {
+			fmt.Printf("[%s] [DEBUG] 发送 PROXY Protocol v1: %s", getCurrentTime(), proxyLine)
+		}
+		server.Write([]byte(proxyLine))
+	}
+
 	go io.Copy(server, bodyReader)
 	io.Copy(client, server)
 }
 
 // 启动单个代理
-func startProxy(listenAddr, targetAddr, whitelistURL string, updateInterval time.Duration) {
+func startProxy(listenAddr, targetAddr, whitelistURL string, updateInterval time.Duration, useProtocolOut bool, localWhitelist string) {
+	localWhitelistPath = localWhitelist
 	if whitelistURL != "" {
 		updateWhitelist(whitelistURL)
 	} else {
@@ -300,13 +327,13 @@ func startProxy(listenAddr, targetAddr, whitelistURL string, updateInterval time
 	}
 	defer listener.Close()
 
-	fmt.Printf("[%s] 启动代理: %s -> %s (use-protocol=%v)\n", getCurrentTime(), listenAddr, targetAddr, useProtocol)
+	fmt.Printf("[%s] 启动代理: %s -> %s (use-protocol-out=%v)\n", getCurrentTime(), listenAddr, targetAddr, useProtocolOut)
 	for {
 		client, err := listener.Accept()
 		if err != nil {
 			continue
 		}
-		go handleConnection(client, targetAddr)
+		go handleConnection(client, targetAddr, useProtocolOut)
 	}
 }
 
@@ -320,7 +347,6 @@ func main() {
 	flag.BoolVar(&debug, "D", false, "显示调试日志")
 	flag.BoolVar(&debug, "debug", false, "显示调试日志")
 	configPath := flag.String("C", "", "JSON 配置文件路径")
-
 	flag.Parse()
 
 	if *configPath != "" {
@@ -345,9 +371,7 @@ func main() {
 				WhitelistURL   string `json:"whitelist_url,omitempty"`
 				UpdateInterval int    `json:"update_interval,omitempty"`
 			}) {
-				useProtocol = proxy.UseProtocol
-				localWhitelistPath = proxy.LocalWhitelist
-				startProxy(proxy.ListenAddr, proxy.TargetAddr, proxy.WhitelistURL, time.Duration(proxy.UpdateInterval)*time.Second)
+				startProxy(proxy.ListenAddr, proxy.TargetAddr, proxy.WhitelistURL, time.Duration(proxy.UpdateInterval)*time.Second, proxy.UseProtocol, proxy.LocalWhitelist)
 			}(p)
 		}
 		select {}
@@ -360,7 +384,6 @@ func main() {
 		return
 	}
 
-	localWhitelistPath = *local
 	parts := strings.SplitN(strings.TrimPrefix(*L, "tcp://"), "/", 2)
 	if len(parts) != 2 {
 		fmt.Println("参数格式错误，应为: -L tcp://:监听端口/目标地址")
@@ -369,6 +392,5 @@ func main() {
 
 	listenAddr := parts[0]
 	targetAddr := parts[1]
-
-	startProxy(listenAddr, targetAddr, *whitelistURL, time.Duration(*updateInterval)*time.Second)
+	startProxy(listenAddr, targetAddr, *whitelistURL, time.Duration(*updateInterval)*time.Second, useProtocol, *local)
 }
