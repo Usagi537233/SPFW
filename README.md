@@ -36,7 +36,7 @@ Usage of ./spfw:
         列表 URL
   -use-protocol
         是否使用 PROXY 协议转发目标
-~~~
+```
 单端口运行
 ~~~
 ./spfw -L tcp://:监听端口/目标地址 -url 白名单URL -local 本地白名单文件 -use-protocol -D
