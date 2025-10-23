@@ -39,7 +39,7 @@ Usage of ./spfw:
 ```
 单端口运行
 ~~~
-./spfw -L tcp://:监听端口/目标地址 -url 白名单URL -local 本地白名单文件 -use-protocol -D
+./spfw -L tcp://:监听端口/目标地址 -url 白名单URL 
 ~~~
 or配置文件
 ~~~
