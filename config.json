@@ -4,18 +4,38 @@
     {
       "listen_addr": ":8080",
       "target_addr": "127.0.0.1:80",
-      "use_protocol": false,
-      "local_whitelist": "",
-      "whitelist_url": "http://example.com/whitelist1.txt",
+      "use_protocol": true,
+      "url": "https://example.com/whitelist1.txt",
+      "local": "/root/whitelist1.txt",
+      "blacklist": false,
       "update_interval": 60
     },
     {
-      "listen_addr": ":8443",
-      "target_addr": "127.0.0.1:443",
-      "use_protocol": true,
-      "local_whitelist": "/root/whitelist_local.txt",
-      "whitelist_url": "",
+      "listen_addr": ":8081",
+      "target_addr": "127.0.0.1:8080",
+      "use_protocol": false,
+      "url": "https://example.com/blacklist1.txt",
+      "local": "/root/blacklist1.txt",
+      "blacklist": true,
       "update_interval": 120
+    },
+    {
+      "listen_addr": ":8082",
+      "target_addr": "192.168.1.100:8000",
+      "use_protocol": true,
+      "url": "",
+      "local": "/root/whitelist2.txt",
+      "blacklist": false,
+      "update_interval": 30
+    },
+    {
+      "listen_addr": ":8083",
+      "target_addr": "192.168.1.101:8001",
+      "use_protocol": false,
+      "url": "",
+      "local": "/root/blacklist2.txt",
+      "blacklist": true,
+      "update_interval": 60
     }
   ]
 }
