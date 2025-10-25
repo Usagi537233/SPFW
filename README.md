@@ -41,7 +41,7 @@ Should we use the PROXY protocol to forward the target
 ```
 Single port operation
 ~~~
-./spfw-L tcp://:listening_port/targetaddress:port - url whitelist URL
+./spfw -L tcp://:listening_port/target:port - url whitelist URL
 ~~~
 Or configuration file
 ~~~
