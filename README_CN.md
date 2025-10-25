@@ -2,6 +2,7 @@
 
 **Secure Port Forward (SPFW)** 是一个轻量级代理服务器，支持 **TCP、HTTP 和 PROXY 协议**，具备客户端 IP 白名单/黑名单管理和可选 PROXY 协议转发功能。适用于内网访问控制、流量转发和远程服务保护等场景。
 
+[ENG](https://github.com/Usagi537233/SPFW/blob/main/README.md) [中文](https://github.com/Usagi537233/SPFW/blob/main/README_CN.md)
 ## 功能特点
 
 - 自动识别 TCP、HTTP 和 PROXY 协议  
