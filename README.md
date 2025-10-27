@@ -7,7 +7,7 @@
 ## Functional Features
 
 -Automatically recognize TCP, HTTP, and PROXY protocols
--Support client IP whitelist/blacklist:
+-Support client IP whitelist/blacklist and mutil iplist:
 -Local files
 -Remote URL automatic update, download failure or non 200 status does not overwrite backup file
 -Supports IP Segments (CIDR)
