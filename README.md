@@ -6,16 +6,17 @@
 
 ## Functional Features
 
--Automatically recognize TCP, HTTP, and PROXY protocols
--Support client IP whitelist/blacklist and mutil iplist:
--Local files
--Remote URL automatic update, download failure or non 200 status does not overwrite backup file
--Supports IP Segments (CIDR)
--Each port maintains an independent list to avoid multiple instances from overlapping
--Optional PROXY protocol v1 forwarding to backend service
--The log displays the real client IP address
--Supports JSON configuration file mode and can start multiple proxy instances simultaneously
--Debugging mode can display connection, list loading, and protocol parsing logs
+- Automatically recognize TCP, HTTP, and PROXY protocols
+- Support client IP whitelist/blacklist and mutil iplist:
+- Local files
+- Remote URL automatic update, download failure or non 200 status does not overwrite backup file
+- Supports IP Segments (CIDR)
+- Batch port forwarding
+- Each port maintains an independent list to avoid multiple instances from overlapping
+- Optional PROXY protocol v1 forwarding to backend service
+- The log displays the real client IP address
+- Supports JSON configuration file mode and can start multiple proxy instances simultaneously
+- Debugging mode can display connection, list loading, and protocol parsing logs
 
 ## Run
 
@@ -46,6 +47,17 @@ Single port operation
 Single port mutil iplist operation
 ~~~
 ./spfw -L tcp://:listening_port/target:port -url whitelistURL1,whitelistURL2
+~~~
+Batch Port Forwarding
+~~~
+tcp://:2333-2444/127.0.0.1:3333
+    → Forwards ports 2333–2444 to port 3333
+
+tcp://:2333-2444/127.0.0.1:3333-3444
+    → Forwards ports 2333–2444 to 3333–3444
+
+tcp://:2333-2444/127.0.0.1:3333-3555
+    → Still forwards only to 3333–3444 range
 ~~~
 Or configuration file
 ~~~
