@@ -16,7 +16,6 @@ API_JSON=$(curl -s https://api.github.com/repos/Usagi537233/SPFW/releases/latest
 echo "[EN] Selecting asset exactly named 'spfw'..."
 echo "[CN] 精确匹配名字为 'spfw' 的 Linux 可执行文件..."
 
-# 精确匹配 name == "spfw"
 DOWNLOAD_URL=$(echo "$API_JSON" \
     | jq -r '.assets[] | select(.name == "spfw") | .browser_download_url')
 
@@ -26,9 +25,13 @@ if [[ -z "$DOWNLOAD_URL" || "$DOWNLOAD_URL" == "null" ]]; then
     exit 1
 fi
 
-echo "[EN] Downloading SPFW: $DOWNLOAD_URL"
-echo "[CN] 正在下载 SPFW: $DOWNLOAD_URL"
-curl -L "$DOWNLOAD_URL" -o spfw
+echo "[EN] Downloading SPFW (directly into folder)..."
+echo "[CN] 正在下载 SPFW（直接保存到目录）..."
+
+# ⭐ 关键：直接下载到当前目录，不指定文件名，不重命名
+curl -LO "$DOWNLOAD_URL"
+
+# 给 spfw 加执行权限
 chmod +x spfw
 
 echo "[EN] Creating start.sh"
