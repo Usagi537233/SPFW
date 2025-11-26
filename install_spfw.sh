@@ -9,22 +9,25 @@ echo "[CN] 创建目录: $INSTALL_DIR"
 mkdir -p "$INSTALL_DIR"
 cd "$INSTALL_DIR"
 
-echo "[EN] Fetching latest SPFW release information..."
+echo "[EN] Fetching latest SPFW release info..."
 echo "[CN] 获取最新 SPFW Release 信息..."
 API_JSON=$(curl -s https://api.github.com/repos/Usagi537233/SPFW/releases/latest)
 
-echo "[EN] Selecting Linux x64 asset named 'spfw'..."
-echo "[CN] 选择名字为 'spfw' 的 Linux 版本文件..."
-DOWNLOAD_URL=$(echo "$API_JSON" | grep '"name": "spfw"' -n -A 3 | grep "browser_download_url" | cut -d '"' -f 4)
+echo "[EN] Selecting asset exactly named 'spfw'..."
+echo "[CN] 精确匹配名字为 'spfw' 的 Linux 可执行文件..."
 
-if [[ -z "$DOWNLOAD_URL" ]]; then
-    echo "[EN] Could not find asset named 'spfw' in latest release!"
-    echo "[CN] 最新 Release 中未找到名为 'spfw' 的文件！"
+# 精确匹配 name == "spfw"
+DOWNLOAD_URL=$(echo "$API_JSON" \
+    | jq -r '.assets[] | select(.name == "spfw") | .browser_download_url')
+
+if [[ -z "$DOWNLOAD_URL" || "$DOWNLOAD_URL" == "null" ]]; then
+    echo "[EN] ERROR: No asset named 'spfw' found."
+    echo "[CN] 错误：未找到名为 'spfw' 的文件。"
     exit 1
 fi
 
-echo "[EN] Downloading SPFW from: $DOWNLOAD_URL"
-echo "[CN] 下载 SPFW 文件: $DOWNLOAD_URL"
+echo "[EN] Downloading SPFW: $DOWNLOAD_URL"
+echo "[CN] 正在下载 SPFW: $DOWNLOAD_URL"
 curl -L "$DOWNLOAD_URL" -o spfw
 chmod +x spfw
 
