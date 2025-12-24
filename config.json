@@ -35,7 +35,8 @@
       "url": "",
       "local": "/root/blacklist2.txt",
       "blacklist": true,
-      "update_interval": 60
+      "update_interval": 60,
+      "fallback": "127.0.0.1:8080"
     }
   ]
 }
