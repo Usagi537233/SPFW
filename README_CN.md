@@ -31,6 +31,8 @@ Usage of ./spfw:
         是否使用黑名单模式
   -debug
         显示调试日志
+  -fallback
+        回落地址，非名单IP转发到此
   -local string
         本地列表文件路径
   -t int
