@@ -22,23 +22,25 @@
 
 ```text
 Usage of ./spfw:
--C string
-JSON configuration file path
--D displays debugging logs
--L string
-Format: tcp://: Port/Target (required)
--blacklist
-Do you want to use blacklist mode
--debug
-Display debugging logs
--local string
-Local list file path
--t int
-Update interval (seconds) (default 60)
--url string
-List URL
--use-protocol
-Should we use the PROXY protocol to forward the target
+  -C string
+        JSON config file path
+  -D    Enable debug logging
+  -L string
+        tcp://[host]:port[-range]/targetHost:targetPort[-range]
+  -ZH
+        Use Chinese messages
+  -blacklist
+        Use blacklist mode
+  -fallback string
+        Fallback address, e.g. 127.0.0.1:8080 (forward non-allowlisted clients to this address when target is IP)
+  -local string
+        Local list path(s), supports glob
+  -t int
+        Update interval (seconds) (default 60)
+  -url string
+        List URL(s), comma/semicolon/space separated
+  -use-protocol
+        Use PROXY protocol when forwarding
 ```
 Single port operation
 ~~~
