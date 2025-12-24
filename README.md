@@ -16,6 +16,7 @@
 - Optional PROXY protocol v1 forwarding to backend service
 - The log displays the real client IP address
 - Supports JSON configuration file mode and can start multiple proxy instances simultaneously
+- Support Fallback forward non-allowlisted clients to this address when target is IP
 - Debugging mode can display connection, list loading, and protocol parsing logs
 
 ## Run
